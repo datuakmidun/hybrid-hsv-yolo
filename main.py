@@ -1,13 +1,5 @@
 """
-KRSBI-B Hybrid HSV + YOLO Ball Detection System
-================================================
-
-Sistem deteksi bola hybrid yang menggabungkan:
-- HSV color detection (fast, untuk kandidat detection)
-- YOLO verification (akurat, untuk filter false positive)
-
-Author: KRSBI-B Team
-Date: 2024
+KRSBI-B Hybrid HSV + YOLO Ball Detection System - FIXED
 """
 
 import cv2
@@ -19,10 +11,6 @@ import math
 
 from optimizations import FrameSkipper
 
-# ============================================
-# YOLO VERIFIER CLASS
-# ============================================
-
 class YOLOBallVerifier:
     """Class untuk verify ball detection menggunakan YOLOv8"""
     
@@ -32,16 +20,7 @@ class YOLOBallVerifier:
                  sports_ball_class_id=32,
                  roi_margin=0.3,
                  enable_debug=False):
-        """
-        Initialize YOLO verifier
-        
-        Args:
-            model_path: Path ke YOLOv8 model file
-            confidence_threshold: Minimum confidence (0.0-1.0)
-            sports_ball_class_id: Class ID untuk 'sports ball' di COCO (default: 32)
-            roi_margin: Margin untuk expand bbox (default: 0.3 = 30%)
-            enable_debug: Enable debug output
-        """
+        """Initialize YOLO verifier"""
         print(f"[YOLO Verifier] Initializing...")
         print(f"[YOLO Verifier] Model: {model_path}")
         print(f"[YOLO Verifier] Confidence threshold: {confidence_threshold}")
@@ -80,12 +59,7 @@ class YOLOBallVerifier:
         return x_new, y_new, w_new, h_new
     
     def verify_region(self, frame, x, y, w, h):
-        """
-        Verify apakah region mengandung bola
-        
-        Returns:
-            tuple: (is_ball: bool, confidence: float, bbox: tuple or None)
-        """
+        """Verify apakah region mengandung bola"""
         start_time = time.time()
         
         # Expand bbox untuk safety margin
@@ -183,10 +157,6 @@ class YOLOBallVerifier:
         }
 
 
-# ============================================
-# HELPER FUNCTIONS (dari TrackTanding)
-# ============================================
-
 def putText(frame, text, x, y, r, g, b, scale, thickness):
     """Helper untuk put text dengan warna BGR"""
     cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 
@@ -197,18 +167,12 @@ def draw_cross_lines(frame):
     h, w = frame.shape[:2]
     center_x, center_y = w // 2, h // 2
     
-    # Horizontal line
     cv2.line(frame, (0, center_y), (w, center_y), (255, 255, 255), 1)
-    # Vertical line
     cv2.line(frame, (center_x, 0), (center_x, h), (255, 255, 255), 1)
-    # Center circle
     cv2.circle(frame, (center_x, center_y), 5, (0, 255, 0), -1)
 
 def sudut(x1, y1, x2, y2, x3, y3):
-    """
-    Hitung sudut antara 3 titik
-    Returns: sudut dalam derajat (string)
-    """
+    """Hitung sudut antara 3 titik"""
     try:
         deg1 = (360 + math.degrees(math.atan2(x1 - x2, y1 - y2))) % 360
         deg2 = (360 + math.degrees(math.atan2(x3 - x2, y3 - y2))) % 360
@@ -220,25 +184,11 @@ def sudut(x1, y1, x2, y2, x3, y3):
         return '500'
 
 def jarak(cx, cy):
-    """Hitung jarak dari center frame (placeholder)"""
-    # Implementasi tergantung kalibrasi kamera Anda
-    # Ini adalah placeholder sederhana
+    """Hitung jarak dari center frame"""
     return math.sqrt(cx**2 + cy**2)
 
 def parseField(hsv, lower, upper, erode_size, dilate_size):
-    """
-    Parse field dengan HSV threshold dan morphology
-    
-    Args:
-        hsv: HSV image
-        lower: Lower HSV bound (tuple)
-        upper: Upper HSV bound (tuple)
-        erode_size: Erosion kernel size
-        dilate_size: Dilation kernel size
-    
-    Returns:
-        mask: Binary mask
-    """
+    """Parse field dengan HSV threshold dan morphology"""
     mask = cv2.inRange(hsv, lower, upper)
     
     if erode_size > 0:
@@ -252,68 +202,44 @@ def parseField(hsv, lower, upper, erode_size, dilate_size):
     return mask
 
 def kirim(degree_ball, param2, param3, jarak_cyan, jarak_magenta):
-    """
-    Kirim data ke Arduino/Serial
-    Implementasi sesuai protokol komunikasi Anda
-    """
-    # TODO: Implement serial communication
-    # Contoh:
-    # data = f"{degree_ball},{param2},{param3},{jarak_cyan},{jarak_magenta}\n"
-    # serial_port.write(data.encode())
+    """Kirim data ke Arduino/Serial"""
     pass
 
 
-# ============================================
-# MAIN TRACKING FUNCTION
-# ============================================
-
 def TrackTanding(camera, config):
-    """
-    Main tracking function dengan hybrid HSV + YOLO detection
-    
-    Args:
-        camera: OpenCV VideoCapture object
-        config: Dictionary berisi konfigurasi HSV thresholds dan parameters
-    """
+    """Main tracking function dengan hybrid HSV + YOLO detection"""
     
     # Unpack config
     im_width = config.get('im_width', 640)
     center_im = config.get('center_im', (im_width // 2, 240))
     
-    # HSV thresholds untuk ball
+    # HSV thresholds
     b_Lower_val = config.get('b_Lower_val', (0, 100, 100))
     b_Upper_val = config.get('b_Upper_val', (15, 255, 255))
     Ebsize = config.get('Ebsize', 2)
     Dbsize = config.get('Dbsize', 2)
     
-    # HSV thresholds untuk field (green)
     f_Lower_val = config.get('f_Lower_val', (40, 50, 50))
     f_Upper_val = config.get('f_Upper_val', (80, 255, 255))
     Efsize = config.get('Efsize', 2)
     Dfsize = config.get('Dfsize', 2)
     
-    # HSV thresholds untuk goal cyan
     c_Lower_val = config.get('c_Lower_val', (85, 100, 100))
     c_Upper_val = config.get('c_Upper_val', (95, 255, 255))
     Ecsize = config.get('Ecsize', 2)
     Dcsize = config.get('Dcsize', 2)
     
-    # HSV thresholds untuk goal magenta
     m_Lower_val = config.get('m_Lower_val', (140, 100, 100))
     m_Upper_val = config.get('m_Upper_val', (170, 255, 255))
     Emsize = config.get('Emsize', 2)
     Dmsize = config.get('Dmsize', 2)
     
-    # Goal yellow (jika ada)
     g_Lower_val = config.get('g_Lower_val', (20, 100, 100))
     g_Upper_val = config.get('g_Upper_val', (30, 255, 255))
     Egsize = config.get('Egsize', 2)
     Dgsize = config.get('Dgsize', 2)
     
-    # ============================================
     # INITIALIZE YOLO VERIFIER
-    # ============================================
-    
     print("\n" + "="*60)
     print("INITIALIZING HYBRID HSV + YOLO SYSTEM")
     print("="*60)
@@ -325,7 +251,6 @@ def TrackTanding(camera, config):
             model_path=MODEL_PATH,
             confidence_threshold=0.45,
             roi_margin=0.3,
-            max_roi_size=320,
             enable_debug=False
         )
         print("✅ YOLO Verifier ready!")
@@ -345,25 +270,19 @@ def TrackTanding(camera, config):
     print("  'c' - Capture screenshot")
     print("="*60 + "\n")
     
-    # ============================================
     # FPS MONITORING
-    # ============================================
-    
     frame_count = 0
     start_time = time.time()
     fps_history = []
     FPS_WINDOW = 30
     
-    # ============================================
+    # Frame skipper
+    frame_skipper = FrameSkipper(skip_frames=1)
+    
     # MAIN LOOP
-    # ============================================
-    
-    frame_skipper = FrameSkipper(skip_frames=1) 
-    
     while True:
         loop_start = time.time()
         
-        # Read frame
         grabbed, frame = camera.read()
         if not grabbed:
             print("ERROR: Failed to grab frame")
@@ -372,20 +291,14 @@ def TrackTanding(camera, config):
         frame = imutils.resize(frame, width=im_width)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
-        # ============================================
         # HSV DETECTION
-        # ============================================
-        
         mask_ball = parseField(hsv.copy(), b_Lower_val, b_Upper_val, Ebsize, Dbsize)
         mask_field = parseField(hsv.copy(), f_Lower_val, f_Upper_val, Efsize, Dfsize)
         mask_goal = parseField(hsv.copy(), g_Lower_val, g_Upper_val, Egsize, Dgsize)
         mask_cyan = parseField(hsv.copy(), c_Lower_val, c_Upper_val, Ecsize, Dcsize)
         mask_magenta = parseField(hsv.copy(), m_Lower_val, m_Upper_val, Emsize, Dmsize)
         
-        # ============================================
         # BALL DETECTION - HYBRID HSV + YOLO
-        # ============================================
-        
         contours_ball = cv2.findContours(mask_ball.copy(), cv2.RETR_EXTERNAL, 
                                          cv2.CHAIN_APPROX_SIMPLE)[-2]
         
@@ -395,68 +308,55 @@ def TrackTanding(camera, config):
         yolo_confidence = 0.0
         
         if len(contours_ball) > 0:
-            # Sort by area, check top 2 candidates
             candidates = sorted(contours_ball, key=cv2.contourArea, reverse=True)[:2]
             
             for idx, candidate in enumerate(candidates):
-                # Get HSV detection info
                 ((x_hsv, y_hsv), radius_hsv) = cv2.minEnclosingCircle(candidate)
                 x_hsv, y_hsv, radius_hsv = int(x_hsv), int(y_hsv), int(radius_hsv)
                 
-                # Get bounding box untuk YOLO
                 x_bbox, y_bbox, w_bbox, h_bbox = cv2.boundingRect(candidate)
                 
-                # Visualize HSV candidate (yellow = unverified)
                 cv2.circle(frame, (x_hsv, y_hsv), radius_hsv, (0, 255, 255), 1)
                 putText(frame, f'HSV#{idx+1}', x_hsv-20, y_hsv-radius_hsv-10, 
                        0, 255, 255, 0.4, 1)
                 
-                # ============================================
-                # YOLO VERIFICATION
-                # ============================================
-                
+                # YOLO VERIFICATION - FIXED LOGIC
                 if yolo_enabled and yolo_verifier:
+                    # Cek apakah perlu verify atau reuse hasil sebelumnya
                     if frame_skipper.should_verify():
-                        is_ball, confidence, yolo_bbox = yolo_verifier.verify_region(frame, x_bbox, y_bbox, w_bbox, h_bbox)
+                        is_ball, confidence, yolo_bbox = yolo_verifier.verify_region(
+                            frame, x_bbox, y_bbox, w_bbox, h_bbox
+                        )
                         frame_skipper.update_result((is_ball, confidence, yolo_bbox))
                     else:
                         # Reuse hasil frame sebelumnya
                         is_ball, confidence, yolo_bbox = frame_skipper.get_last_result()
                     
-                    is_ball, confidence, yolo_bbox = yolo_verifier.verify_region(
-                        frame, x_bbox, y_bbox, w_bbox, h_bbox
-                    )
-                    
                     if is_ball:
-                        # YOLO confirmed ini adalah bola!
+                        # YOLO confirmed!
                         ball_detected = True
                         yolo_confidence = confidence
                         
-                        # Gunakan koordinat dari YOLO (lebih akurat)
                         if yolo_bbox is not None:
                             x_yolo, y_yolo, w_yolo, h_yolo = yolo_bbox
                             x_ball = x_yolo + w_yolo // 2
                             y_ball = y_yolo + h_yolo // 2
                             radius_ball = max(w_yolo, h_yolo) // 2
                         else:
-                            # Fallback ke HSV coordinates
                             x_ball, y_ball, radius_ball = x_hsv, y_hsv, radius_hsv
                         
-                        # Calculate angle
                         degree_ball = sudut(x_ball, y_ball, center_im[0], center_im[1], 
                                           center_im[0], 0)
                         
-                        # Visualize confirmed ball (green)
                         cv2.circle(frame, (x_ball, y_ball), radius_ball, (0, 255, 0), 2)
                         cv2.circle(frame, (x_ball, y_ball), 3, (0, 255, 255), -1)
                         
-                        # Label dengan confidence
                         putText(frame, f'Ball {confidence:.2f}', 
                                x_ball-30, y_ball-radius_ball-5, 0, 255, 0, 0.5, 2)
                         
-                        break  # Stop checking other candidates
+                        break
                     else:
-                        # YOLO rejected (false positive HSV)
+                        # YOLO rejected
                         cv2.line(frame, 
                                 (x_hsv-radius_hsv, y_hsv-radius_hsv),
                                 (x_hsv+radius_hsv, y_hsv+radius_hsv),
@@ -479,11 +379,7 @@ def TrackTanding(camera, config):
                     putText(frame, 'Ball', x_ball, y_ball, 0, 0, 255, 0.5, 2)
                     break
         
-        # ============================================
         # GOAL DETECTION
-        # ============================================
-        
-        # Goal Cyan
         jarak_goal_cyan = 999
         contours_cyan = cv2.findContours(mask_cyan.copy(), cv2.RETR_EXTERNAL, 
                                         cv2.CHAIN_APPROX_SIMPLE)[-2]
@@ -498,7 +394,6 @@ def TrackTanding(camera, config):
                 putText(frame, 'Goal_cyan', cx_cyan, cy_cyan, 255, 255, 0, 0.5, 2)
                 jarak_goal_cyan = int(jarak(cx_cyan, cy_cyan))
         
-        # Goal Magenta
         jarak_goal_magenta = 999
         contours_magenta = cv2.findContours(mask_magenta.copy(), cv2.RETR_EXTERNAL, 
                                            cv2.CHAIN_APPROX_SIMPLE)[-2]
@@ -513,10 +408,7 @@ def TrackTanding(camera, config):
                 putText(frame, 'Goal_magenta', cx_magenta, cy_magenta, 255, 0, 255, 0.5, 2)
                 jarak_goal_magenta = int(jarak(cx_magenta, cy_magenta))
         
-        # ============================================
         # FPS CALCULATION
-        # ============================================
-        
         loop_time = time.time() - loop_start
         instant_fps = 1.0 / loop_time if loop_time > 0 else 0
         fps_history.append(instant_fps)
@@ -530,20 +422,14 @@ def TrackTanding(camera, config):
         elapsed = time.time() - start_time
         overall_fps = frame_count / elapsed if elapsed > 0 else 0
         
-        # ============================================
-        # VISUALIZATION & INFO DISPLAY
-        # ============================================
-        
-        # Status indicator
+        # VISUALIZATION
         status_color = (0, 255, 0) if yolo_enabled else (0, 165, 255)
         status_text = "HYBRID MODE" if yolo_enabled else "HSV ONLY"
         putText(frame, status_text, 10, 20, status_color[0], status_color[1], 
                status_color[2], 0.6, 2)
         
-        # FPS info
         putText(frame, f'FPS: {avg_fps:.1f}', 10, 40, 255, 255, 255, 0.5, 2)
         
-        # Detection info
         text1 = f'Sudut_Ball= {str(degree_ball)}'
         putText(frame, text1, 10, 60, 0, 255, 0, 0.4, 2)
         
@@ -557,19 +443,10 @@ def TrackTanding(camera, config):
         text3 = f'Jarak_Magenta= {str(int(jarak_goal_magenta))}'
         putText(frame, text3, 10, 110, 0, 0, 255, 0.4, 2)
         
-        # ============================================
-        # SEND DATA
-        # ============================================
-        
         kirim(degree_ball, 0, 0, jarak_goal_cyan, jarak_goal_magenta)
-        
-        # ============================================
-        # DISPLAY & KEYBOARD CONTROL
-        # ============================================
         
         draw_cross_lines(frame)
         
-        # Display sudut di atas bola
         if ball_detected:
             try:
                 putText(frame, f'{degree_ball}', x_ball, y_ball-15, 255, 0, 0, 0.8, 2)
@@ -578,25 +455,22 @@ def TrackTanding(camera, config):
         
         cv2.imshow('KRSBI-B Hybrid Detection', frame)
         
-        # Keyboard control
+        # KEYBOARD CONTROL
         k = cv2.waitKey(1) & 0xFF
         
         if k == ord('q'):
-            # Quit
             if yolo_enabled and yolo_verifier:
                 print("\n" + "="*60)
                 yolo_verifier.print_stats()
             break
         
         elif k == ord('y'):
-            # Toggle YOLO verification
             if yolo_verifier:
                 yolo_enabled = not yolo_enabled
                 status = "ENABLED" if yolo_enabled else "DISABLED"
                 print(f"\n[INFO] YOLO Verification {status}")
         
         elif k == ord('s'):
-            # Show statistics
             if yolo_enabled and yolo_verifier:
                 yolo_verifier.print_stats()
             print(f"\nFPS Statistics:")
@@ -605,7 +479,6 @@ def TrackTanding(camera, config):
             print(f"  Total frames: {frame_count}\n")
         
         elif k == ord('r'):
-            # Reset statistics
             if yolo_enabled and yolo_verifier:
                 yolo_verifier.reset_stats()
                 print("\n[INFO] Statistics reset")
@@ -614,7 +487,6 @@ def TrackTanding(camera, config):
             fps_history = []
         
         elif k == ord('c'):
-            # Capture screenshot
             filename = f"screenshot_{int(time.time())}.jpg"
             cv2.imwrite(filename, frame)
             print(f"\n[INFO] Screenshot saved: {filename}")
@@ -623,89 +495,54 @@ def TrackTanding(camera, config):
     return yolo_verifier
 
 
-# ============================================
-# MAIN PROGRAM
-# ============================================
-
 if __name__ == "__main__":
     print("="*60)
     print("KRSBI-B HYBRID HSV + YOLO DETECTION SYSTEM")
     print("="*60)
     
-    # ============================================
-    # CONFIGURATION
-    # ============================================
-    
     config = {
-        # Camera settings
         'camera_index': 0,
         'im_width': 640,
         'center_im': (320, 240),
-        
-        # YOLO model
         'model_path': 'models/yolov8n.pt',
-        
-        # HSV thresholds untuk BALL (Orange)
         'b_Lower_val': (0, 100, 100),
         'b_Upper_val': (15, 255, 255),
         'Ebsize': 2,
         'Dbsize': 2,
-        
-        # HSV thresholds untuk FIELD (Green)
         'f_Lower_val': (40, 50, 50),
         'f_Upper_val': (80, 255, 255),
         'Efsize': 2,
         'Dfsize': 2,
-        
-        # HSV thresholds untuk GOAL CYAN
         'c_Lower_val': (85, 100, 100),
         'c_Upper_val': (95, 255, 255),
         'Ecsize': 2,
         'Dcsize': 2,
-        
-        # HSV thresholds untuk GOAL MAGENTA
         'm_Lower_val': (140, 100, 100),
         'm_Upper_val': (170, 255, 255),
         'Emsize': 2,
         'Dmsize': 2,
-        
-        # HSV thresholds untuk GOAL YELLOW (optional)
         'g_Lower_val': (20, 100, 100),
         'g_Upper_val': (30, 255, 255),
         'Egsize': 2,
         'Dgsize': 2,
     }
     
-    # ============================================
-    # INITIALIZE CAMERA
-    # ============================================
-    
     print(f"\nOpening camera at index {config['camera_index']}...")
     camera = cv2.VideoCapture(config['camera_index'])
     
     if not camera.isOpened():
         print("ERROR: Cannot open camera!")
-        print("Troubleshooting:")
-        print("1. Check camera connection: ls /dev/video*")
-        print("2. Try different camera_index (0, 1, 2)")
-        print("3. Ensure no other app is using the camera")
         exit(1)
     
-    # Set camera properties
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, config['im_width'])
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     
     print("Camera opened successfully!")
     print(f"Resolution: {config['im_width']}x480")
     
-    # ============================================
-    # RUN TRACKING
-    # ============================================
-    
     try:
         yolo_verifier = TrackTanding(camera, config)
         
-        # Print final statistics
         if yolo_verifier:
             print("\n" + "="*60)
             print("FINAL STATISTICS")
@@ -721,7 +558,6 @@ if __name__ == "__main__":
         traceback.print_exc()
     
     finally:
-        # Cleanup
         print("\nCleaning up...")
         camera.release()
         cv2.destroyAllWindows()
