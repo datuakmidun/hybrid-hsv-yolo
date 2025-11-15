@@ -358,6 +358,8 @@ def TrackTanding(camera, config):
             break
         
         frame = imutils.resize(frame, width=im_width)
+        frame = cv2.rotate(frame, cv2.ROTATE_180)
+        frame = cv2.flip(frame, 1)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
         # HSV DETECTION
