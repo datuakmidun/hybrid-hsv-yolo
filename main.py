@@ -10,6 +10,7 @@ import imutils
 import math
 
 from optimizations import FrameSkipper
+from kalman_tracker import BallKalmanTracker, draw_kalman_info
 
 class YOLOBallVerifier:
     """Class untuk verify ball detection menggunakan YOLOv8"""
@@ -255,19 +256,32 @@ def TrackTanding(camera, config):
         )
         print("✅ YOLO Verifier ready!")
         yolo_enabled = True
+        detection_mode = 'HYBRID'
+        
+        print(f"\n[INFO] Target object: BOLA OREN (Orange Ball)")
+        print(f"[INFO] HSV range: {config.get('b_Lower_val')} to {config.get('b_Upper_val')}")
+        print(f"[INFO] YOLO class: sports_ball (ID: 32)")
+        print(f"[INFO] Starting in HYBRID mode (HSV + YOLO)\n")
     except Exception as e:
         print(f"❌ YOLO Verifier initialization failed: {e}")
         print("⚠️  Falling back to HSV-only mode")
         yolo_enabled = False
         yolo_verifier = None
+        detection_mode = 'HSV_ONLY'
     
     print("="*60)
     print("CONTROLS:")
     print("  'q' - Quit")
-    print("  'y' - Toggle YOLO verification ON/OFF")
+    print("  'm' - Cycle mode: HYBRID (HSV+YOLO) → HSV_ONLY → YOLO_ONLY")
+    print("  'k' - Toggle Kalman Filter ON/OFF")
     print("  's' - Show statistics")
     print("  'r' - Reset statistics")
     print("  'c' - Capture screenshot")
+    print("="*60)
+    print("DETECTION MODES:")
+    print("  HYBRID    : HSV pre-filter + YOLO verify (balanced)")
+    print("  HSV_ONLY  : Fast but false positives")
+    print("  YOLO_ONLY : Accurate but slower (full frame scan)")
     print("="*60 + "\n")
     
     # FPS MONITORING
@@ -279,6 +293,61 @@ def TrackTanding(camera, config):
     # Frame skipper
     frame_skipper = FrameSkipper(skip_frames=1)
     
+    kalman_ball = BallKalmanTracker(process_noise=1.0, measurement_noise=10.0)
+    use_kalman = True
+    print("✅ Kalman Filter initialized!")
+    
+    def detect_ball_yolo_only(frame):
+        """
+        Detect bola OREN menggunakan YOLO full-frame scan
+        
+        Mode ini:
+        - Tidak pakai HSV pre-filtering
+        - YOLO scan seluruh frame mencari sports ball (class 32)
+        - Lebih lambat karena process full frame
+        - Lebih akurat karena tidak tergantung HSV threshold
+        - Cocok untuk kondisi lighting berubah-ubah
+        
+        Note: Tetap detect bola OREN yang sama, hanya metodenya beda
+        """
+        if not yolo_verifier:
+            return False, 0, 0, 0, 0.0
+        
+        try:
+            # YOLO inference pada full frame
+            results = yolo_verifier.model(frame, conf=0.45, verbose=False)
+            detections = results[0].boxes
+            
+            best_ball = None
+            best_confidence = 0
+            
+            for detection in detections:
+                class_id = int(detection.cls[0])
+                confidence = float(detection.conf[0])
+                
+                # Filter: hanya sports ball (class 32)
+                if class_id == yolo_verifier.sports_ball_class_id:
+                    if confidence > best_confidence:
+                        bbox = detection.xyxy[0].cpu().numpy()
+                        x1, y1, x2, y2 = map(int, bbox)
+                        
+                        best_ball = {
+                            'x': (x1 + x2) // 2,
+                            'y': (y1 + y2) // 2,
+                            'radius': max(x2 - x1, y2 - y1) // 2,
+                            'confidence': confidence
+                        }
+                        best_confidence = confidence
+            
+            if best_ball:
+                return True, best_ball['x'], best_ball['y'], best_ball['radius'], best_ball['confidence']
+            else:
+                return False, 0, 0, 0, 0.0
+                
+        except Exception as e:
+            print(f"[YOLO_ONLY] Error: {e}")
+            return False, 0, 0, 0, 0.0
+        
     # MAIN LOOP
     while True:
         loop_start = time.time()
@@ -302,83 +371,163 @@ def TrackTanding(camera, config):
         contours_ball = cv2.findContours(mask_ball.copy(), cv2.RETR_EXTERNAL, 
                                          cv2.CHAIN_APPROX_SIMPLE)[-2]
         
+        # BALL DETECTION - BOLA OREN (3 MODE BERBEDA)
+        # HYBRID: HSV kandidat + YOLO verify (akurat, FPS sedang)
+        # HSV_ONLY: HSV saja (cepat, banyak false positive)
+        # YOLO_ONLY: YOLO full-frame scan (akurat, FPS rendah)
         ball_detected = False
         x_ball, y_ball, radius_ball = 0, 0, 0
         degree_ball = '500'
         yolo_confidence = 0.0
+        vx, vy = 0.0, 0.0
         
-        if len(contours_ball) > 0:
-            candidates = sorted(contours_ball, key=cv2.contourArea, reverse=True)[:2]
+        # === MODE: YOLO ONLY ===
+        if detection_mode == 'YOLO_ONLY':
+            is_ball, x_raw, y_raw, radius_ball, yolo_confidence = detect_ball_yolo_only(frame)
             
-            for idx, candidate in enumerate(candidates):
-                ((x_hsv, y_hsv), radius_hsv) = cv2.minEnclosingCircle(candidate)
-                x_hsv, y_hsv, radius_hsv = int(x_hsv), int(y_hsv), int(radius_hsv)
+            if is_ball:
+                ball_detected = True
                 
-                x_bbox, y_bbox, w_bbox, h_bbox = cv2.boundingRect(candidate)
+                # Kalman filter
+                if use_kalman:
+                    x_ball, y_ball, vx, vy = kalman_ball.update(x_raw, y_raw)
+                else:
+                    x_ball, y_ball = x_raw, y_raw
+                    vx, vy = 0, 0
                 
-                cv2.circle(frame, (x_hsv, y_hsv), radius_hsv, (0, 255, 255), 1)
-                putText(frame, f'HSV#{idx+1}', x_hsv-20, y_hsv-radius_hsv-10, 
-                       0, 255, 255, 0.4, 1)
+                degree_ball = sudut(x_ball, y_ball, center_im[0], center_im[1], 
+                                  center_im[0], 0)
                 
-                # YOLO VERIFICATION - FIXED LOGIC
-                if yolo_enabled and yolo_verifier:
-                    # Cek apakah perlu verify atau reuse hasil sebelumnya
-                    if frame_skipper.should_verify():
-                        is_ball, confidence, yolo_bbox = yolo_verifier.verify_region(
-                            frame, x_bbox, y_bbox, w_bbox, h_bbox
-                        )
-                        frame_skipper.update_result((is_ball, confidence, yolo_bbox))
-                    else:
-                        # Reuse hasil frame sebelumnya
-                        is_ball, confidence, yolo_bbox = frame_skipper.get_last_result()
+                # Draw
+                if use_kalman:
+                    draw_kalman_info(frame, x_ball, y_ball, vx, vy, 
+                                   color=(255, 0, 255), label=f"YOLO {yolo_confidence:.2f}")
+                else:
+                    cv2.circle(frame, (x_ball, y_ball), radius_ball, (255, 0, 255), 2)
+                    cv2.circle(frame, (x_ball, y_ball), 3, (0, 255, 255), -1)
+                    putText(frame, f'YOLO {yolo_confidence:.2f}', 
+                           x_ball-30, y_ball-radius_ball-5, 255, 0, 255, 0.5, 2)
+        
+        # === MODE: HYBRID atau HSV_ONLY ===
+        else:
+            contours_ball = cv2.findContours(mask_ball.copy(), cv2.RETR_EXTERNAL, 
+                                             cv2.CHAIN_APPROX_SIMPLE)[-2]
+            
+            if len(contours_ball) > 0:
+                candidates = sorted(contours_ball, key=cv2.contourArea, reverse=True)[:2]
+                
+                for idx, candidate in enumerate(candidates):
+                    ((x_hsv, y_hsv), radius_hsv) = cv2.minEnclosingCircle(candidate)
+                    x_hsv, y_hsv, radius_hsv = int(x_hsv), int(y_hsv), int(radius_hsv)
                     
-                    if is_ball:
-                        # YOLO confirmed!
-                        ball_detected = True
-                        yolo_confidence = confidence
-                        
-                        if yolo_bbox is not None:
-                            x_yolo, y_yolo, w_yolo, h_yolo = yolo_bbox
-                            x_ball = x_yolo + w_yolo // 2
-                            y_ball = y_yolo + h_yolo // 2
-                            radius_ball = max(w_yolo, h_yolo) // 2
+                    x_bbox, y_bbox, w_bbox, h_bbox = cv2.boundingRect(candidate)
+                    
+                    cv2.circle(frame, (x_hsv, y_hsv), radius_hsv, (0, 255, 255), 1)
+                    putText(frame, f'HSV#{idx+1}', x_hsv-20, y_hsv-radius_hsv-10, 
+                           0, 255, 255, 0.4, 1)
+                    
+                    # HYBRID MODE: HSV + YOLO verification
+                    if detection_mode == 'HYBRID' and yolo_verifier:
+                        if frame_skipper.should_verify():
+                            is_ball, confidence, yolo_bbox = yolo_verifier.verify_region(
+                                frame, x_bbox, y_bbox, w_bbox, h_bbox
+                            )
+                            frame_skipper.update_result((is_ball, confidence, yolo_bbox))
                         else:
-                            x_ball, y_ball, radius_ball = x_hsv, y_hsv, radius_hsv
+                            is_ball, confidence, yolo_bbox = frame_skipper.get_last_result()
+                        
+                        if is_ball:
+                            ball_detected = True
+                            yolo_confidence = confidence
+                            
+                            if yolo_bbox is not None:
+                                x_yolo, y_yolo, w_yolo, h_yolo = yolo_bbox
+                                x_raw = x_yolo + w_yolo // 2
+                                y_raw = y_yolo + h_yolo // 2
+                                radius_ball = max(w_yolo, h_yolo) // 2
+                            else:
+                                x_raw, y_raw, radius_ball = x_hsv, y_hsv, radius_hsv
+                            
+                            # Kalman
+                            if use_kalman:
+                                x_ball, y_ball, vx, vy = kalman_ball.update(x_raw, y_raw)
+                            else:
+                                x_ball, y_ball = x_raw, y_raw
+                                vx, vy = 0, 0
+                            
+                            degree_ball = sudut(x_ball, y_ball, center_im[0], center_im[1], 
+                                              center_im[0], 0)
+                            
+                            # Draw
+                            if use_kalman:
+                                draw_kalman_info(frame, x_ball, y_ball, vx, vy, 
+                                               color=(0, 255, 0), label=f"Ball {confidence:.2f}")
+                            else:
+                                cv2.circle(frame, (x_ball, y_ball), radius_ball, (0, 255, 0), 2)
+                                cv2.circle(frame, (x_ball, y_ball), 3, (0, 255, 255), -1)
+                                putText(frame, f'Ball {confidence:.2f}', 
+                                       x_ball-30, y_ball-radius_ball-5, 0, 255, 0, 0.5, 2)
+                            
+                            break
+                        else:
+                            # YOLO rejected
+                            cv2.line(frame, 
+                                    (x_hsv-radius_hsv, y_hsv-radius_hsv),
+                                    (x_hsv+radius_hsv, y_hsv+radius_hsv),
+                                    (0, 0, 255), 2)
+                            cv2.line(frame,
+                                    (x_hsv-radius_hsv, y_hsv+radius_hsv),
+                                    (x_hsv+radius_hsv, y_hsv-radius_hsv),
+                                    (0, 0, 255), 2)
+                            putText(frame, 'REJECT', x_hsv-25, y_hsv, 0, 0, 255, 0.4, 1)
+                    
+                    # HSV_ONLY MODE
+                    else:
+                        ball_detected = True
+                        x_raw, y_raw, radius_ball = x_hsv, y_hsv, radius_hsv
+                        
+                        # Kalman
+                        if use_kalman:
+                            x_ball, y_ball, vx, vy = kalman_ball.update(x_raw, y_raw)
+                        else:
+                            x_ball, y_ball = x_raw, y_raw
+                            vx, vy = 0.0, 0.0
                         
                         degree_ball = sudut(x_ball, y_ball, center_im[0], center_im[1], 
                                           center_im[0], 0)
                         
-                        cv2.circle(frame, (x_ball, y_ball), radius_ball, (0, 255, 0), 2)
-                        cv2.circle(frame, (x_ball, y_ball), 3, (0, 255, 255), -1)
-                        
-                        putText(frame, f'Ball {confidence:.2f}', 
-                               x_ball-30, y_ball-radius_ball-5, 0, 255, 0, 0.5, 2)
-                        
+                        # Draw
+                        if use_kalman:
+                            draw_kalman_info(frame, x_ball, y_ball, vx, vy, 
+                                           color=(0, 0, 255), label="Ball (HSV)")
+                        else:
+                            cv2.circle(frame, (x_ball, y_ball), radius_ball, (0, 0, 255), 2)
+                            cv2.circle(frame, (x_ball, y_ball), 3, (0, 255, 255), -1)
+                            putText(frame, 'Ball', x_ball, y_ball, 0, 0, 255, 0.5, 2)
                         break
-                    else:
-                        # YOLO rejected
-                        cv2.line(frame, 
-                                (x_hsv-radius_hsv, y_hsv-radius_hsv),
-                                (x_hsv+radius_hsv, y_hsv+radius_hsv),
-                                (0, 0, 255), 2)
-                        cv2.line(frame,
-                                (x_hsv-radius_hsv, y_hsv+radius_hsv),
-                                (x_hsv+radius_hsv, y_hsv-radius_hsv),
-                                (0, 0, 255), 2)
-                        putText(frame, 'REJECT', x_hsv-25, y_hsv, 0, 0, 255, 0.4, 1)
-                
-                else:
-                    # YOLO disabled, fallback ke HSV only
-                    ball_detected = True
-                    x_ball, y_ball, radius_ball = x_hsv, y_hsv, radius_hsv
-                    degree_ball = sudut(x_ball, y_ball, center_im[0], center_im[1], 
-                                      center_im[0], 0)
-                    
-                    cv2.circle(frame, (x_ball, y_ball), radius_ball, (0, 0, 255), 2)
-                    cv2.circle(frame, (x_ball, y_ball), 3, (0, 255, 255), -1)
-                    putText(frame, 'Ball', x_ball, y_ball, 0, 0, 255, 0.5, 2)
-                    break
         
+        # Kalman prediction jika tidak detect
+        if not ball_detected and use_kalman and kalman_ball.is_initialized():
+            prediction = kalman_ball.predict()
+            if prediction is not None:
+                x_ball, y_ball, pred_vx, pred_vy = prediction
+                vx, vy = pred_vx, pred_vy
+                ball_detected = True
+                
+                cv2.circle(frame, (x_ball, y_ball), 15, (0, 165, 255), 2)
+                cv2.circle(frame, (x_ball, y_ball), 3, (0, 165, 255), -1)
+                putText(frame, 'PREDICTED', x_ball-30, y_ball-20, 0, 165, 255, 0.5, 2)
+                
+                degree_ball = sudut(x_ball, y_ball, center_im[0], center_im[1], 
+                                  center_im[0], 0)
+        
+        # Reset Kalman
+        if not ball_detected and use_kalman:
+            kalman_ball.reset()
+        
+        # GOAL DETECTION
+        jarak_goal_cyan = 999
+            
         # GOAL DETECTION
         jarak_goal_cyan = 999
         contours_cyan = cv2.findContours(mask_cyan.copy(), cv2.RETR_EXTERNAL, 
@@ -423,17 +572,33 @@ def TrackTanding(camera, config):
         overall_fps = frame_count / elapsed if elapsed > 0 else 0
         
         # VISUALIZATION
-        status_color = (0, 255, 0) if yolo_enabled else (0, 165, 255)
-        status_text = "HYBRID MODE" if yolo_enabled else "HSV ONLY"
+        mode_colors = {
+            'HYBRID': (0, 255, 0),      # Hijau
+            'HSV_ONLY': (0, 0, 255),    # Merah
+            'YOLO_ONLY': (255, 0, 255)  # Magenta
+        }
+        status_color = mode_colors.get(detection_mode, (255, 255, 255))
+        status_text = f"MODE: {detection_mode}"
+        if use_kalman:
+            status_text += " + KALMAN"
         putText(frame, status_text, 10, 20, status_color[0], status_color[1], 
                status_color[2], 0.6, 2)
         
         putText(frame, f'FPS: {avg_fps:.1f}', 10, 40, 255, 255, 255, 0.5, 2)
         
+        if detection_mode == 'HYBRID':
+            mode_info = "(HSV filter + YOLO verify)"
+        elif detection_mode == 'HSV_ONLY':
+            mode_info = "(HSV color only)"
+        else:
+            mode_info = "(YOLO full scan)"
+        
+        putText(frame, mode_info, 10, 35, 128, 128, 128, 0.35, 1)
+        
         text1 = f'Sudut_Ball= {str(degree_ball)}'
         putText(frame, text1, 10, 60, 0, 255, 0, 0.4, 2)
         
-        if yolo_enabled and ball_detected and yolo_confidence > 0:
+        if ball_detected and yolo_confidence > 0:
             text_conf = f'Confidence= {yolo_confidence:.2f}'
             putText(frame, text_conf, 10, 75, 0, 255, 0, 0.4, 2)
         
@@ -447,9 +612,16 @@ def TrackTanding(camera, config):
         
         draw_cross_lines(frame)
         
-        if ball_detected:
+        # Display sudut dan velocity di atas bola
+        if ball_detected and x_ball > 0 and y_ball > 0:
             try:
                 putText(frame, f'{degree_ball}', x_ball, y_ball-15, 255, 0, 0, 0.8, 2)
+                
+                # Display velocity info jika Kalman aktif
+                if use_kalman and (abs(vx) > 0.1 or abs(vy) > 0.1):
+                    speed = np.sqrt(vx**2 + vy**2)
+                    putText(frame, f'v={speed:.1f}px/s', x_ball, y_ball+30, 
+                           0, 255, 255, 0.4, 1)
             except:
                 pass
         
@@ -464,19 +636,64 @@ def TrackTanding(camera, config):
                 yolo_verifier.print_stats()
             break
         
-        elif k == ord('y'):
+        elif k == ord('m'):
+            # Cycle detection mode untuk deteksi BOLA OREN
             if yolo_verifier:
-                yolo_enabled = not yolo_enabled
-                status = "ENABLED" if yolo_enabled else "DISABLED"
-                print(f"\n[INFO] YOLO Verification {status}")
+                modes = ['HYBRID', 'HSV_ONLY', 'YOLO_ONLY']
+                current_idx = modes.index(detection_mode)
+                detection_mode = modes[(current_idx + 1) % len(modes)]
+                
+                # Reset Kalman saat ganti mode
+                if use_kalman:
+                    kalman_ball.reset()
+                
+                # Info
+                mode_desc = {
+                    'HYBRID': 'HSV pre-filter + YOLO verification',
+                    'HSV_ONLY': 'HSV color detection only (fast)',
+                    'YOLO_ONLY': 'YOLO full-frame scan (accurate)'
+                }
+                
+                print(f"\n{'='*60}")
+                print(f"[MODE CHANGED] {detection_mode}")
+                print(f"Description: {mode_desc[detection_mode]}")
+                print(f"{'='*60}\n")
+            else:
+                print("\n[WARNING] YOLO not available, staying in HSV_ONLY mode")
+
+        elif k == ord('k'):
+            # Toggle Kalman Filter
+            use_kalman = not use_kalman
+            status = "ENABLED" if use_kalman else "DISABLED"
+            print(f"\n[INFO] Kalman Filter {status}")
+            if not use_kalman:
+                kalman_ball.reset()
         
         elif k == ord('s'):
-            if yolo_enabled and yolo_verifier:
+            # Show statistics
+            print("\n" + "="*60)
+            print("DETECTION STATISTICS")
+            print("="*60)
+            print(f"Current mode: {detection_mode}")  # TAMBAH INI
+            
+            if yolo_verifier and detection_mode in ['HYBRID', 'YOLO_ONLY']:
                 yolo_verifier.print_stats()
+            
+            if use_kalman:
+                kalman_ball.print_stats()
+            
             print(f"\nFPS Statistics:")
             print(f"  Current FPS: {avg_fps:.1f}")
             print(f"  Overall FPS: {overall_fps:.1f}")
-            print(f"  Total frames: {frame_count}\n")
+            print(f"  Total frames: {frame_count}")
+            
+            # Mode comparison
+            print(f"\nMode Performance:")
+            print(f"  HYBRID    : ~20-30 FPS (recommended)")
+            print(f"  HSV_ONLY  : ~50-60 FPS (fast but inaccurate)")
+            print(f"  YOLO_ONLY : ~10-15 FPS (accurate but slow)")
+            print("="*60 + "\n")
+            
         
         elif k == ord('r'):
             if yolo_enabled and yolo_verifier:
