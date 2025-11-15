@@ -11,6 +11,8 @@ import math
 
 from optimizations import FrameSkipper
 from kalman_tracker import BallKalmanTracker, draw_kalman_info
+from redis_handler import RedisHandler
+import redis_handler
 
 class YOLOBallVerifier:
     """Class untuk verify ball detection menggunakan YOLOv8"""
@@ -202,9 +204,26 @@ def parseField(hsv, lower, upper, erode_size, dilate_size):
     
     return mask
 
-def kirim(degree_ball, param2, param3, jarak_cyan, jarak_magenta):
-    """Kirim data ke Arduino/Serial"""
-    pass
+def kirim(redis_handler, degree_ball, x_ball, y_ball, confidence, vx, vy, 
+          jarak_cyan, jarak_magenta, detection_mode, kalman_active):
+    """
+    Kirim data ke Redis Server
+    
+    Data akan di-publish ke Redis channel untuk di-forward ke Arduino via USB TTL
+    """
+    if redis_handler and redis_handler.connected:
+        redis_handler.publish_ball_data(
+            degree_ball=degree_ball,
+            x_ball=x_ball,
+            y_ball=y_ball,
+            confidence=confidence,
+            velocity_x=vx,
+            velocity_y=vy,
+            jarak_cyan=jarak_cyan,
+            jarak_magenta=jarak_magenta,
+            detection_mode=detection_mode,
+            kalman_active=kalman_active
+        )
 
 
 def TrackTanding(camera, config):
@@ -278,10 +297,14 @@ def TrackTanding(camera, config):
     print("  'r' - Reset statistics")
     print("  'c' - Capture screenshot")
     print("="*60)
+    print("="*60)
     print("DETECTION MODES:")
     print("  HYBRID    : HSV pre-filter + YOLO verify (balanced)")
     print("  HSV_ONLY  : Fast but false positives")
     print("  YOLO_ONLY : Accurate but slower (full frame scan)")
+    print("="*60)
+    print("DATA FLOW:")
+    print("  Camera → Redis Server → USB TTL → Arduino Mega")
     print("="*60 + "\n")
     
     # FPS MONITORING
@@ -296,6 +319,14 @@ def TrackTanding(camera, config):
     kalman_ball = BallKalmanTracker(process_noise=1.0, measurement_noise=10.0)
     use_kalman = True
     print("✅ Kalman Filter initialized!")
+    
+    redis_handler = RedisHandler(
+        host='localhost',
+        port=6379,
+        channel='krsbi_ball_tracking'
+    )
+    use_redis = redis_handler.connected
+    print(f"✅ Redis Handler initialized! (Status: {'Connected' if use_redis else 'Offline'})\n")
     
     def detect_ball_yolo_only(frame):
         """
@@ -610,7 +641,9 @@ def TrackTanding(camera, config):
         text3 = f'Jarak_Magenta= {str(int(jarak_goal_magenta))}'
         putText(frame, text3, 10, 110, 0, 0, 255, 0.4, 2)
         
-        kirim(degree_ball, 0, 0, jarak_goal_cyan, jarak_goal_magenta)
+        # Kirim data ke Redis
+        kirim(redis_handler, degree_ball, x_ball, y_ball, yolo_confidence, 
+              vx, vy, jarak_goal_cyan, jarak_goal_magenta, detection_mode, use_kalman)
         
         draw_cross_lines(frame)
         
@@ -676,7 +709,7 @@ def TrackTanding(camera, config):
             print("\n" + "="*60)
             print("DETECTION STATISTICS")
             print("="*60)
-            print(f"Current mode: {detection_mode}")  # TAMBAH INI
+            print(f"Current mode: {detection_mode}")
             
             if yolo_verifier and detection_mode in ['HYBRID', 'YOLO_ONLY']:
                 yolo_verifier.print_stats()
@@ -684,17 +717,12 @@ def TrackTanding(camera, config):
             if use_kalman:
                 kalman_ball.print_stats()
             
-            print(f"\nFPS Statistics:")
-            print(f"  Current FPS: {avg_fps:.1f}")
-            print(f"  Overall FPS: {overall_fps:.1f}")
-            print(f"  Total frames: {frame_count}")
+            # === TAMBAH INI ===
+            if redis_handler and redis_handler.connected:
+                redis_handler.print_stats()
+            # === AKHIR TAMBAHAN ===
             
-            # Mode comparison
-            print(f"\nMode Performance:")
-            print(f"  HYBRID    : ~20-30 FPS (recommended)")
-            print(f"  HSV_ONLY  : ~50-60 FPS (fast but inaccurate)")
-            print(f"  YOLO_ONLY : ~10-15 FPS (accurate but slow)")
-            print("="*60 + "\n")
+            print(f"\nFPS Statistics:")
             
         
         elif k == ord('r'):
@@ -778,6 +806,8 @@ if __name__ == "__main__":
     
     finally:
         print("\nCleaning up...")
+        if 'redis_handler' in locals() and redis_handler:
+            redis_handler.close()
         camera.release()
         cv2.destroyAllWindows()
         print("Camera released. Goodbye!")
