@@ -1,0 +1,21 @@
+{
+    "target_name": "ball",
+    "timestamp": "2025-11-19 16:40:29",
+    "hsv_values": {
+        "lower": [
+            2,
+            164,
+            40
+        ],
+        "upper": [
+            23,
+            255,
+            255
+        ]
+    },
+    "morphology": {
+        "erode": 6,
+        "dilate": 10,
+        "blur": 1
+    }
+}

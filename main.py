@@ -8,11 +8,45 @@ from ultralytics import YOLO
 import time
 import imutils
 import math
+import json
 
 from optimizations import FrameSkipper
 from kalman_tracker import BallKalmanTracker, draw_kalman_info
 from redis_handler import RedisHandler
 import redis_handler
+
+def load_hsv_from_json(json_file):
+    """
+    Load HSV config dari file JSON hasil tuning
+    
+    Args:
+        json_file: Path ke file JSON (misal: 'hsv_config_ball_20251119_103045.json')
+    
+    Returns:
+        tuple: (lower_val, upper_val, erode_size, dilate_size)
+    """
+    try:
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        
+        lower = tuple(data['hsv_values']['lower'])
+        upper = tuple(data['hsv_values']['upper'])
+        erode = data['morphology']['erode']
+        dilate = data['morphology']['dilate']
+        
+        print(f"✅ Loaded config from: {json_file}")
+        print(f"   Lower: {lower}, Upper: {upper}, Erode: {erode}, Dilate: {dilate}")
+        
+        return lower, upper, erode, dilate
+    
+    except FileNotFoundError:
+        print(f"❌ ERROR: File not found: {json_file}")
+        print(f"   Using default values instead.")
+        return None
+    except Exception as e:
+        print(f"❌ ERROR loading {json_file}: {e}")
+        print(f"   Using default values instead.")
+        return None
 
 class YOLOBallVerifier:
     """Class untuk verify ball detection menggunakan YOLOv8"""
@@ -503,6 +537,21 @@ def TrackTanding(camera, config):
                             
                             break
                         else:
+                            # Tambahan: Jika HSV sangat yakin, abaikan hasil YOLO
+                            if radius_hsv > 12:   # sesuaikan threshold radius
+                                ball_detected = True
+                                yolo_confidence = 0   # YOLO tidak terlibat
+                                x_raw, y_raw = x_hsv, y_hsv
+                                radius_ball = radius_hsv
+                                # Update Kalman
+                                if use_kalman:
+                                    x_ball, y_ball, vx, vy = kalman_ball.update(x_raw, y_raw)
+                                else:
+                                    x_ball, y_ball = x_raw, y_raw
+                                    vx, vy = 0, 0
+                                degree_ball = sudut(x_ball, y_ball, center_im[0], center_im[1], center_im[0], 0)
+                                break   # STOP, anggap bola ditemukan
+
                             # YOLO rejected
                             cv2.line(frame, 
                                     (x_hsv-radius_hsv, y_hsv-radius_hsv),
@@ -747,31 +796,84 @@ if __name__ == "__main__":
     print("KRSBI-B HYBRID HSV + YOLO DETECTION SYSTEM")
     print("="*60)
     
+    # ============= LOAD CONFIG DARI JSON =============
+    print("\n[INFO] Loading HSV configurations from JSON files...")
+    
+    # Load Ball config (Bola Orange)
+    ball_config = load_hsv_from_json('hsv_config_ball.json')
+    if ball_config:
+        b_lower, b_upper, b_erode, b_dilate = ball_config
+    else:
+        # Default values jika file tidak ada
+        b_lower, b_upper, b_erode, b_dilate = (0, 100, 100), (15, 255, 255), 2, 2
+    
+    # Load Field config (Lapangan)
+    field_config = load_hsv_from_json('hsv_config_field.json')
+    if field_config:
+        f_lower, f_upper, f_erode, f_dilate = field_config
+    else:
+        f_lower, f_upper, f_erode, f_dilate = (40, 50, 50), (80, 255, 255), 2, 2
+    
+    # Load Cyan Goal config
+    cyan_config = load_hsv_from_json('hsv_config_goal_cyan.json')
+    if cyan_config:
+        c_lower, c_upper, c_erode, c_dilate = cyan_config
+    else:
+        c_lower, c_upper, c_erode, c_dilate = (85, 100, 100), (95, 255, 255), 2, 2
+    
+    # Load Magenta Goal config
+    magenta_config = load_hsv_from_json('hsv_config_goal_magenta.json')
+    if magenta_config:
+        m_lower, m_upper, m_erode, m_dilate = magenta_config
+    else:
+        m_lower, m_upper, m_erode, m_dilate = (140, 100, 100), (170, 255, 255), 2, 2
+    
+    # Load Yellow Goal config
+    yellow_config = load_hsv_from_json('hsv_config_goal_yellow.json')
+    if yellow_config:
+        g_lower, g_upper, g_erode, g_dilate = yellow_config
+    else:
+        g_lower, g_upper, g_erode, g_dilate = (20, 100, 100), (30, 255, 255), 2, 2
+    
+    print("\n[INFO] All configurations loaded!\n")
+    # ============= AKHIR LOAD CONFIG =============
+    
+    # Masukkan ke config dictionary
     config = {
         'camera_index': 0,
         'im_width': 640,
         'center_im': (320, 240),
         'model_path': 'models/yolov8n.pt',
-        'b_Lower_val': (0, 100, 100),
-        'b_Upper_val': (15, 255, 255),
-        'Ebsize': 2,
-        'Dbsize': 2,
-        'f_Lower_val': (40, 50, 50),
-        'f_Upper_val': (80, 255, 255),
-        'Efsize': 2,
-        'Dfsize': 2,
-        'c_Lower_val': (85, 100, 100),
-        'c_Upper_val': (95, 255, 255),
-        'Ecsize': 2,
-        'Dcsize': 2,
-        'm_Lower_val': (140, 100, 100),
-        'm_Upper_val': (170, 255, 255),
-        'Emsize': 2,
-        'Dmsize': 2,
-        'g_Lower_val': (20, 100, 100),
-        'g_Upper_val': (30, 255, 255),
-        'Egsize': 2,
-        'Dgsize': 2,
+        
+        # Ball config (dari JSON)
+        'b_Lower_val': b_lower,
+        'b_Upper_val': b_upper,
+        'Ebsize': b_erode,
+        'Dbsize': b_dilate,
+        
+        # Field config (dari JSON)
+        'f_Lower_val': f_lower,
+        'f_Upper_val': f_upper,
+        'Efsize': f_erode,
+        'Dfsize': f_dilate,
+        
+        # Cyan Goal config (dari JSON)
+        'c_Lower_val': c_lower,
+        'c_Upper_val': c_upper,
+        'Ecsize': c_erode,
+        'Dcsize': c_dilate,
+        
+        # Magenta Goal config (dari JSON)
+        'm_Lower_val': m_lower,
+        'm_Upper_val': m_upper,
+        'Emsize': m_erode,
+        'Dmsize': m_dilate,
+        
+        # Yellow Goal config (dari JSON)
+        'g_Lower_val': g_lower,
+        'g_Upper_val': g_upper,
+        'Egsize': g_erode,
+        'Dgsize': g_dilate,
     }
     
     print(f"\nOpening camera at index {config['camera_index']}...")
