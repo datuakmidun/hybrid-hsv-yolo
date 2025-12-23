@@ -52,7 +52,7 @@ class YOLOBallVerifier:
     """Class untuk verify ball detection menggunakan YOLOv8"""
     
     def __init__(self, 
-                 model_path="models/yolov8n.pt",
+                 model_path="models/orange_ball_yolov8_best.pt",
                  confidence_threshold=0.45,
                  sports_ball_class_id=32,
                  roi_margin=0.3,
@@ -298,7 +298,7 @@ def TrackTanding(camera, config):
     print("INITIALIZING HYBRID HSV + YOLO SYSTEM")
     print("="*60)
     
-    MODEL_PATH = config.get('model_path', "models/yolov8n.pt")
+    MODEL_PATH = config.get('model_path', "models/orange_ball_yolov8_best.pt")
     
     try:
         yolo_verifier = YOLOBallVerifier(
@@ -379,8 +379,9 @@ def TrackTanding(camera, config):
             return False, 0, 0, 0, 0.0
         
         try:
+            frame_resized = cv2.resize(frame, (640, 640))
             # YOLO inference pada full frame
-            results = yolo_verifier.model(frame, conf=0.45, verbose=False)
+            results = yolo_verifier.model(frame_resized,verbose=False)
             detections = results[0].boxes
             
             best_ball = None
@@ -843,7 +844,7 @@ if __name__ == "__main__":
         'camera_index': 0,
         'im_width': 640,
         'center_im': (320, 240),
-        'model_path': 'models/yolov8n.pt',
+        'model_path': 'models/orange_ball_yolov8_best.pt',
         
         # Ball config (dari JSON)
         'b_Lower_val': b_lower,

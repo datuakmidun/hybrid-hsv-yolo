@@ -8,7 +8,7 @@ benar-benar bola atau false positive (jeruk, cone, dll)
 Usage:
     from yolo_verifier import YOLOBallVerifier
     
-    verifier = YOLOBallVerifier(model_path="models/yolov8n.pt")
+    verifier = YOLOBallVerifier(model_path="models/orange_ball_yolov8_best.pt")
     is_ball, confidence = verifier.verify_region(frame, x, y, w, h)
 
 Author: KRSBI-B Team
@@ -27,7 +27,7 @@ class YOLOBallVerifier:
     """
     
     def __init__(self, 
-                 model_path="models/yolov8n.pt",
+                 model_path="models/orange_ball_yolov8_best.pt",
                  confidence_threshold=0.45,
                  sports_ball_class_id=32,
                  roi_margin=0.3,
@@ -252,7 +252,7 @@ if __name__ == "__main__":
     
     # Initialize verifier
     verifier = YOLOBallVerifier(
-        model_path="models/yolov8n.pt",
+        model_path="models/orange_ball_yolov8_best.pt",
         confidence_threshold=0.45,
         enable_debug=True
     )
